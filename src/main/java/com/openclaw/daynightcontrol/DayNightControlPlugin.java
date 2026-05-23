@@ -15,6 +15,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.HashSet;
 
 public final class DayNightControlPlugin extends JavaPlugin implements TabExecutor {
     private static final long DAY_START = 0L;
@@ -26,6 +28,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
 
     private final Map<String, WorldSettings> worldSettings = new HashMap<>();
     private final Map<String, Double> timeRemainders = new HashMap<>();
+    private final Set<String> worldsWithoutClock = new HashSet<>();
     private WorldSettings defaultSettings;
 
     @Override
@@ -69,28 +72,38 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
 
     private void tickWorlds() {
         for (World world : Bukkit.getWorlds()) {
+            String key = world.getUID().toString();
+            if (worldsWithoutClock.contains(key)) {
+                continue;
+            }
+
             WorldSettings settings = settingsFor(world);
             if (!settings.enabled()) {
                 continue;
             }
 
-            if (Boolean.TRUE.equals(world.getGameRuleValue(GameRule.DO_DAYLIGHT_CYCLE))) {
-                world.setGameRule(GameRule.DO_DAYLIGHT_CYCLE, false);
-            }
+            try {
+                if (Boolean.TRUE.equals(world.getGameRuleValue(GameRule.DO_DAYLIGHT_CYCLE))) {
+                    world.setGameRule(GameRule.DO_DAYLIGHT_CYCLE, false);
+                }
 
-            long time = Math.floorMod(world.getTime(), FULL_DAY_TICKS);
-            boolean isDay = time < NIGHT_START;
-            double targetMinutes = isDay ? settings.dayMinutes() : settings.nightMinutes();
-            double span = isDay ? DAY_SPAN : NIGHT_SPAN;
-            double increment = span / (targetMinutes * 60.0 * SERVER_TICKS_PER_SECOND);
+                long time = Math.floorMod(world.getTime(), FULL_DAY_TICKS);
+                boolean isDay = time < NIGHT_START;
+                double targetMinutes = isDay ? settings.dayMinutes() : settings.nightMinutes();
+                double span = isDay ? DAY_SPAN : NIGHT_SPAN;
+                double increment = span / (targetMinutes * 60.0 * SERVER_TICKS_PER_SECOND);
 
-            String key = world.getUID().toString();
-            double totalIncrement = timeRemainders.getOrDefault(key, 0.0) + increment;
-            long wholeTicks = (long) Math.floor(totalIncrement);
-            timeRemainders.put(key, totalIncrement - wholeTicks);
+                double totalIncrement = timeRemainders.getOrDefault(key, 0.0) + increment;
+                long wholeTicks = (long) Math.floor(totalIncrement);
+                timeRemainders.put(key, totalIncrement - wholeTicks);
 
-            if (wholeTicks > 0L) {
-                world.setFullTime(world.getFullTime() + wholeTicks);
+                if (wholeTicks > 0L) {
+                    world.setFullTime(world.getFullTime() + wholeTicks);
+                }
+            } catch (IllegalArgumentException ex) {
+                worldsWithoutClock.add(key);
+                timeRemainders.remove(key);
+                getLogger().warning("Skipping world without a controllable clock: " + world.getName() + " (" + ex.getMessage() + ")");
             }
         }
     }
