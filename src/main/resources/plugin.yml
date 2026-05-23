@@ -1,0 +1,15 @@
+name: DayNightControl
+version: ${version}
+main: com.openclaw.daynightcontrol.DayNightControlPlugin
+api-version: '1.21'
+author: OpenClaw
+description: Lets server admins customize Minecraft day and night length per world.
+commands:
+  dnc:
+    description: Configure day/night duration.
+    usage: /dnc <status|set|reload|help>
+    permission: daynightcontrol.admin
+permissions:
+  daynightcontrol.admin:
+    description: Allows changing DayNightControl settings.
+    default: op

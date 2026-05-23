@@ -1,0 +1,16 @@
+# DayNightControl
+# Minecraft vanilla: day 10m, night roughly 10m if dusk/dawn are grouped with night.
+# This plugin controls the clock directly so you can choose any lengths.
+
+default:
+  enabled: true
+  day-minutes: 10.0
+  night-minutes: 10.0
+
+# Optional per-world overrides.
+# worlds:
+#   world:
+#     enabled: true
+#     day-minutes: 20.0
+#     night-minutes: 5.0
+worlds: {}
