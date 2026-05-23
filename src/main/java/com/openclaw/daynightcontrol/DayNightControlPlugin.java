@@ -1,12 +1,14 @@
 package com.openclaw.daynightcontrol;
 
 import org.bukkit.Bukkit;
+import org.bukkit.GameMode;
 import org.bukkit.GameRule;
 import org.bukkit.World;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabExecutor;
 import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.ArrayList;
@@ -22,6 +24,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
     private static final long DAY_START = 0L;
     private static final long NIGHT_START = 13000L;
     private static final long FULL_DAY_TICKS = 24000L;
+    private static final long MORNING_TIME = 0L;
     private static final long DAY_SPAN = NIGHT_START - DAY_START;      // 0..12999
     private static final long NIGHT_SPAN = FULL_DAY_TICKS - NIGHT_START; // 13000..23999
     private static final double SERVER_TICKS_PER_SECOND = 20.0;
@@ -87,6 +90,10 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
                     world.setGameRule(GameRule.DO_DAYLIGHT_CYCLE, false);
                 }
 
+                if (skipNightIfEnoughPlayersAreSleeping(world, key)) {
+                    continue;
+                }
+
                 long time = Math.floorMod(world.getTime(), FULL_DAY_TICKS);
                 boolean isDay = time < NIGHT_START;
                 double targetMinutes = isDay ? settings.dayMinutes() : settings.nightMinutes();
@@ -106,6 +113,47 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
                 getLogger().warning("Skipping world without a controllable clock: " + world.getName() + " (" + ex.getMessage() + ")");
             }
         }
+    }
+
+    private boolean skipNightIfEnoughPlayersAreSleeping(World world, String key) {
+        long time = Math.floorMod(world.getTime(), FULL_DAY_TICKS);
+        if (time < NIGHT_START) {
+            return false;
+        }
+
+        List<Player> players = world.getPlayers().stream()
+                .filter(player -> player.getGameMode() != GameMode.SPECTATOR)
+                .filter(player -> player.getGameMode() != GameMode.CREATIVE || player.isSleeping())
+                .toList();
+        if (players.isEmpty()) {
+            return false;
+        }
+
+        long sleeping = players.stream().filter(Player::isSleeping).count();
+        if (sleeping <= 0 || sleeping * 100 < requiredSleepingPercentage(world) * players.size()) {
+            return false;
+        }
+
+        long fullTime = world.getFullTime();
+        long currentTime = Math.floorMod(fullTime, FULL_DAY_TICKS);
+        world.setFullTime(fullTime - currentTime + FULL_DAY_TICKS + MORNING_TIME);
+        world.setStorm(false);
+        world.setThundering(false);
+        timeRemainders.remove(key);
+        for (Player player : world.getPlayers()) {
+            if (player.isSleeping()) {
+                player.wakeup(false);
+            }
+        }
+        return true;
+    }
+
+    private int requiredSleepingPercentage(World world) {
+        Integer value = world.getGameRuleValue(GameRule.PLAYERS_SLEEPING_PERCENTAGE);
+        if (value == null) {
+            return 100;
+        }
+        return Math.max(0, Math.min(100, value));
     }
 
     @Override
