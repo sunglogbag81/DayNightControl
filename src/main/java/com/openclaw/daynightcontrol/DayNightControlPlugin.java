@@ -25,12 +25,14 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
     private static final long NIGHT_START = 13000L;
     private static final long FULL_DAY_TICKS = 24000L;
     private static final long MORNING_TIME = 0L;
+    private static final long SLEEP_SKIP_DELAY_TICKS = 100L;
     private static final long DAY_SPAN = NIGHT_START - DAY_START;      // 0..12999
     private static final long NIGHT_SPAN = FULL_DAY_TICKS - NIGHT_START; // 13000..23999
     private static final double SERVER_TICKS_PER_SECOND = 20.0;
 
     private final Map<String, WorldSettings> worldSettings = new HashMap<>();
     private final Map<String, Double> timeRemainders = new HashMap<>();
+    private final Map<String, Long> sleepReadySinceTicks = new HashMap<>();
     private final Set<String> worldsWithoutClock = new HashSet<>();
     private WorldSettings defaultSettings;
 
@@ -118,6 +120,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
     private boolean skipNightIfEnoughPlayersAreSleeping(World world, String key) {
         long time = Math.floorMod(world.getTime(), FULL_DAY_TICKS);
         if (time < NIGHT_START) {
+            sleepReadySinceTicks.remove(key);
             return false;
         }
 
@@ -126,20 +129,28 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
                 .filter(player -> player.getGameMode() != GameMode.CREATIVE || player.isSleeping())
                 .toList();
         if (players.isEmpty()) {
+            sleepReadySinceTicks.remove(key);
             return false;
         }
 
         long sleeping = players.stream().filter(Player::isSleeping).count();
         if (sleeping <= 0 || sleeping * 100 < requiredSleepingPercentage(world) * players.size()) {
+            sleepReadySinceTicks.remove(key);
             return false;
         }
 
         long fullTime = world.getFullTime();
+        long readySince = sleepReadySinceTicks.computeIfAbsent(key, ignored -> fullTime);
+        if (fullTime - readySince < SLEEP_SKIP_DELAY_TICKS) {
+            return false;
+        }
+
         long currentTime = Math.floorMod(fullTime, FULL_DAY_TICKS);
         world.setFullTime(fullTime - currentTime + FULL_DAY_TICKS + MORNING_TIME);
         world.setStorm(false);
         world.setThundering(false);
         timeRemainders.remove(key);
+        sleepReadySinceTicks.remove(key);
         for (Player player : world.getPlayers()) {
             if (player.isSleeping()) {
                 player.wakeup(false);
