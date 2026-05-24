@@ -20,6 +20,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.HashSet;
+import java.util.UUID;
 
 public final class DayNightControlPlugin extends JavaPlugin implements TabExecutor {
     private static final long DAY_START = 0L;
@@ -33,6 +34,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
     private final Map<String, Double> timeRemainders = new HashMap<>();
     private final Map<String, Long> sleepReadySinceTicks = new HashMap<>();
     private final Set<String> sleepFastForwardWorlds = new HashSet<>();
+    private final Map<String, Set<UUID>> sleepFastForwardPlayers = new HashMap<>();
     private long serverTicks;
     private final Set<String> worldsWithoutClock = new HashSet<>();
     private WorldSettings defaultSettings;
@@ -102,7 +104,16 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
     }
 
     private double readSleepFastForwardSeconds(ConfigurationSection section, double fallback) {
-        double value = section.getDouble("sleep-fast-forward-seconds", fallback);
+        double value;
+        if (section.contains("sleep-fast-forward-seconds")) {
+            value = section.getDouble("sleep-fast-forward-seconds", fallback);
+        } else if (section.contains("sleep-fast-forward-multiplier")) {
+            value = 5.0;
+            getLogger().warning(section.getCurrentPath() + ".sleep-fast-forward-multiplier is deprecated; "
+                    + "using sleep-fast-forward-seconds: 5.0. Please update config.yml.");
+        } else {
+            value = fallback;
+        }
         if (!Double.isFinite(value) || value < 1.0 || value > 30.0) {
             getLogger().warning(section.getCurrentPath() + ".sleep-fast-forward-seconds has invalid value " + value
                     + "; using " + fallback + " instead. Allowed range: 1..30 seconds.");
@@ -129,6 +140,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
                 timeRemainders.remove(key);
                 sleepReadySinceTicks.remove(key);
                 sleepFastForwardWorlds.remove(key);
+                sleepFastForwardPlayers.remove(key);
                 continue;
             }
 
@@ -165,6 +177,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
                         } else {
                             sleepReadySinceTicks.remove(key);
                             sleepFastForwardWorlds.remove(key);
+                            sleepFastForwardPlayers.remove(key);
                         }
                     }
                 }
@@ -191,6 +204,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
         if (time < NIGHT_START && !world.isThundering()) {
             sleepReadySinceTicks.remove(key);
             sleepFastForwardWorlds.remove(key);
+            sleepFastForwardPlayers.remove(key);
             return false;
         }
 
@@ -201,6 +215,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
         if (players.isEmpty()) {
             sleepReadySinceTicks.remove(key);
             sleepFastForwardWorlds.remove(key);
+            sleepFastForwardPlayers.remove(key);
             return false;
         }
 
@@ -208,6 +223,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
         if (sleeping <= 0 || sleeping * 100 < requiredSleepingPercentage(world) * players.size()) {
             sleepReadySinceTicks.remove(key);
             sleepFastForwardWorlds.remove(key);
+            sleepFastForwardPlayers.remove(key);
             return false;
         }
 
@@ -217,7 +233,11 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
             return false;
         }
 
-        players.stream().filter(Player::isSleeping).forEach(this::resetPhantomTimer);
+        Set<UUID> sleepingPlayerIds = sleepFastForwardPlayers.computeIfAbsent(key, ignored -> new HashSet<>());
+        players.stream().filter(Player::isSleeping).forEach(player -> {
+            sleepingPlayerIds.add(player.getUniqueId());
+            resetPhantomTimer(player);
+        });
         sleepFastForwardWorlds.add(key);
         return true;
     }
@@ -242,7 +262,11 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
         timeRemainders.remove(key);
         sleepReadySinceTicks.remove(key);
         sleepFastForwardWorlds.remove(key);
+        Set<UUID> sleepingPlayerIds = sleepFastForwardPlayers.remove(key);
         for (Player player : world.getPlayers()) {
+            if (sleepingPlayerIds != null && sleepingPlayerIds.contains(player.getUniqueId())) {
+                resetPhantomTimer(player);
+            }
             if (player.isSleeping()) {
                 resetPhantomTimer(player);
                 player.wakeup(false);
@@ -349,7 +373,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
                     getConfig().set(path + "sleep-delay-seconds", seconds);
                     sender.sendMessage("§a[DayNightControl] §f" + world.getName() + "§a 수면 fast-forward 대기 시간을 §f" + seconds + "초§a로 설정했습니다.");
                 }
-                case "sleep-duration" -> {
+                case "sleep-duration", "sleep-speed" -> {
                     ensureWorldConfigScaffold(path, current);
                     double seconds = parseSleepFastForwardSeconds(args[2]);
                     getConfig().set(path + "sleep-fast-forward-seconds", seconds);
@@ -466,7 +490,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
             return filter(List.of("status", "set", "reload", "help"), args[0]);
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("set")) {
-            return filter(List.of("day", "night", "enabled", "sleep-delay", "sleep-duration"), args[1]);
+            return filter(List.of("day", "night", "enabled", "sleep-delay", "sleep-duration", "sleep-speed"), args[1]);
         }
         if (args.length == 3 && args[0].equalsIgnoreCase("set") && args[1].equalsIgnoreCase("enabled")) {
             return filter(List.of("true", "false"), args[2]);
