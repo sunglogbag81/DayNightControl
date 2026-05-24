@@ -24,8 +24,8 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
     private static final long DAY_START = 0L;
     private static final long NIGHT_START = 13000L;
     private static final long FULL_DAY_TICKS = 24000L;
-    private static final long SLEEP_SKIP_DELAY_TICKS = 100L;
-    private static final double SLEEP_NIGHT_SPEED_MULTIPLIER = 100.0;
+    private static final long SLEEP_SKIP_DELAY_TICKS = 20L;
+    private static final double SLEEP_NIGHT_SPEED_MULTIPLIER = 600.0;
     private static final long DAY_SPAN = NIGHT_START - DAY_START;      // 0..12999
     private static final long NIGHT_SPAN = FULL_DAY_TICKS - NIGHT_START; // 13000..23999
     private static final double SERVER_TICKS_PER_SECOND = 20.0;
