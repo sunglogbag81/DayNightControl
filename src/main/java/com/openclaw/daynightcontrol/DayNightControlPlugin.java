@@ -9,9 +9,6 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabExecutor;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.entity.Player;
-import org.bukkit.event.EventHandler;
-import org.bukkit.event.Listener;
-import org.bukkit.event.player.PlayerBedLeaveEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.ArrayList;
@@ -23,7 +20,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.HashSet;
 
-public final class DayNightControlPlugin extends JavaPlugin implements TabExecutor, Listener {
+public final class DayNightControlPlugin extends JavaPlugin implements TabExecutor {
     private static final long DAY_START = 0L;
     private static final long NIGHT_START = 13000L;
     private static final long FULL_DAY_TICKS = 24000L;
@@ -45,7 +42,6 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
         loadSettings();
         Objects.requireNonNull(getCommand("dnc"), "dnc command missing from plugin.yml").setExecutor(this);
         Objects.requireNonNull(getCommand("dnc"), "dnc command missing from plugin.yml").setTabCompleter(this);
-        Bukkit.getPluginManager().registerEvents(this, this);
 
         Bukkit.getScheduler().runTaskTimer(this, this::tickWorlds, 1L, 1L);
         getLogger().info("DayNightControl enabled.");
@@ -145,7 +141,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
                 double targetMinutes = isDay ? settings.dayMinutes() : settings.nightMinutes();
                 double span = isDay ? DAY_SPAN : NIGHT_SPAN;
                 double increment = span / (targetMinutes * 60.0 * SERVER_TICKS_PER_SECOND);
-                if (!isDay && enoughPlayersAreSleeping(world, key, settings)) {
+                if (!isDay && (sleepFastForwardWorlds.contains(key) || enoughPlayersAreSleeping(world, key, settings))) {
                     increment *= settings.sleepFastForwardMultiplier();
                 }
 
@@ -229,18 +225,6 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
             if (player.isSleeping()) {
                 player.wakeup(false);
             }
-        }
-    }
-
-    @EventHandler(ignoreCancelled = true)
-    public void onBedLeave(PlayerBedLeaveEvent event) {
-        World world = event.getPlayer().getWorld();
-        String key = world.getUID().toString();
-        if (!sleepFastForwardWorlds.contains(key)) {
-            return;
-        }
-        if (Math.floorMod(world.getTime(), FULL_DAY_TICKS) >= NIGHT_START) {
-            event.setCancelled(true);
         }
     }
 
