@@ -6,6 +6,10 @@ default:
   enabled: true
   day-minutes: 10.0
   night-minutes: 10.0
+  # Seconds to wait after enough players are sleeping before fast-forward starts.
+  sleep-delay-seconds: 1.0
+  # Multiplier applied to night speed while enough players are sleeping.
+  sleep-fast-forward-multiplier: 600.0
 
 # Optional per-world overrides.
 # worlds:
@@ -13,4 +17,6 @@ default:
 #     enabled: true
 #     day-minutes: 20.0
 #     night-minutes: 5.0
+#     sleep-delay-seconds: 1.0
+#     sleep-fast-forward-multiplier: 600.0
 worlds: {}
