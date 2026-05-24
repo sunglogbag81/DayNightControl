@@ -56,7 +56,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
 
     private void loadSettings() {
         reloadConfig();
-        defaultSettings = readSettings(getConfig().getConfigurationSection("default"), new WorldSettings(true, 10.0, 10.0, 1.0, 600.0));
+        defaultSettings = readSettings(getConfig().getConfigurationSection("default"), new WorldSettings(true, 10.0, 10.0, 0.0, 600.0));
         worldSettings.clear();
 
         ConfigurationSection worlds = getConfig().getConfigurationSection("worlds");
