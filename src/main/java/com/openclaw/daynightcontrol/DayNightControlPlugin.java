@@ -9,6 +9,9 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabExecutor;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerBedLeaveEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.ArrayList;
@@ -20,7 +23,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.HashSet;
 
-public final class DayNightControlPlugin extends JavaPlugin implements TabExecutor {
+public final class DayNightControlPlugin extends JavaPlugin implements TabExecutor, Listener {
     private static final long DAY_START = 0L;
     private static final long NIGHT_START = 13000L;
     private static final long FULL_DAY_TICKS = 24000L;
@@ -33,6 +36,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
     private final Map<String, WorldSettings> worldSettings = new HashMap<>();
     private final Map<String, Double> timeRemainders = new HashMap<>();
     private final Map<String, Long> sleepReadySinceTicks = new HashMap<>();
+    private final Set<String> sleepFastForwardWorlds = new HashSet<>();
     private long serverTicks;
     private final Set<String> worldsWithoutClock = new HashSet<>();
     private WorldSettings defaultSettings;
@@ -43,6 +47,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
         loadSettings();
         Objects.requireNonNull(getCommand("dnc"), "dnc command missing from plugin.yml").setExecutor(this);
         Objects.requireNonNull(getCommand("dnc"), "dnc command missing from plugin.yml").setTabCompleter(this);
+        Bukkit.getPluginManager().registerEvents(this, this);
 
         Bukkit.getScheduler().runTaskTimer(this, this::tickWorlds, 1L, 1L);
         getLogger().info("DayNightControl enabled.");
@@ -106,6 +111,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
                 restoreDaylightCycle(world);
                 timeRemainders.remove(key);
                 sleepReadySinceTicks.remove(key);
+                sleepFastForwardWorlds.remove(key);
                 continue;
             }
 
@@ -136,6 +142,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
                             finishSleepFastForward(world, key);
                         } else {
                             sleepReadySinceTicks.remove(key);
+                            sleepFastForwardWorlds.remove(key);
                         }
                     }
                 }
@@ -161,6 +168,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
         long time = Math.floorMod(world.getTime(), FULL_DAY_TICKS);
         if (time < NIGHT_START) {
             sleepReadySinceTicks.remove(key);
+            sleepFastForwardWorlds.remove(key);
             return false;
         }
 
@@ -170,12 +178,14 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
                 .toList();
         if (players.isEmpty()) {
             sleepReadySinceTicks.remove(key);
+            sleepFastForwardWorlds.remove(key);
             return false;
         }
 
         long sleeping = players.stream().filter(Player::isSleeping).count();
         if (sleeping <= 0 || sleeping * 100 < requiredSleepingPercentage(world) * players.size()) {
             sleepReadySinceTicks.remove(key);
+            sleepFastForwardWorlds.remove(key);
             return false;
         }
 
@@ -184,6 +194,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
             return false;
         }
 
+        sleepFastForwardWorlds.add(key);
         return true;
     }
 
@@ -192,10 +203,23 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
         world.setThundering(false);
         timeRemainders.remove(key);
         sleepReadySinceTicks.remove(key);
+        sleepFastForwardWorlds.remove(key);
         for (Player player : world.getPlayers()) {
             if (player.isSleeping()) {
                 player.wakeup(false);
             }
+        }
+    }
+
+    @EventHandler(ignoreCancelled = true)
+    public void onBedLeave(PlayerBedLeaveEvent event) {
+        World world = event.getPlayer().getWorld();
+        String key = world.getUID().toString();
+        if (!sleepFastForwardWorlds.contains(key)) {
+            return;
+        }
+        if (Math.floorMod(world.getTime(), FULL_DAY_TICKS) >= NIGHT_START) {
+            event.setCancelled(true);
         }
     }
 
