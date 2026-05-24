@@ -24,8 +24,8 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
     private static final long DAY_START = 0L;
     private static final long NIGHT_START = 13000L;
     private static final long FULL_DAY_TICKS = 24000L;
-    private static final long MORNING_TIME = 0L;
     private static final long SLEEP_SKIP_DELAY_TICKS = 100L;
+    private static final double SLEEP_NIGHT_SPEED_MULTIPLIER = 100.0;
     private static final long DAY_SPAN = NIGHT_START - DAY_START;      // 0..12999
     private static final long NIGHT_SPAN = FULL_DAY_TICKS - NIGHT_START; // 13000..23999
     private static final double SERVER_TICKS_PER_SECOND = 20.0;
@@ -33,6 +33,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
     private final Map<String, WorldSettings> worldSettings = new HashMap<>();
     private final Map<String, Double> timeRemainders = new HashMap<>();
     private final Map<String, Long> sleepReadySinceTicks = new HashMap<>();
+    private long serverTicks;
     private final Set<String> worldsWithoutClock = new HashSet<>();
     private WorldSettings defaultSettings;
 
@@ -45,6 +46,13 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
 
         Bukkit.getScheduler().runTaskTimer(this, this::tickWorlds, 1L, 1L);
         getLogger().info("DayNightControl enabled.");
+    }
+
+    @Override
+    public void onDisable() {
+        for (World world : Bukkit.getWorlds()) {
+            restoreDaylightCycle(world);
+        }
     }
 
     private void loadSettings() {
@@ -66,9 +74,19 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
         }
         return new WorldSettings(
                 section.getBoolean("enabled", fallback.enabled()),
-                Math.max(0.05, section.getDouble("day-minutes", fallback.dayMinutes())),
-                Math.max(0.05, section.getDouble("night-minutes", fallback.nightMinutes()))
+                readMinutes(section, "day-minutes", fallback.dayMinutes()),
+                readMinutes(section, "night-minutes", fallback.nightMinutes())
         );
+    }
+
+    private double readMinutes(ConfigurationSection section, String key, double fallback) {
+        double value = section.getDouble(key, fallback);
+        if (!Double.isFinite(value) || value < 0.05 || value > 1440.0) {
+            getLogger().warning(section.getCurrentPath() + "." + key + " has invalid value " + value
+                    + "; using " + fallback + " instead. Allowed range: 0.05..1440 minutes.");
+            return fallback;
+        }
+        return value;
     }
 
     private WorldSettings settingsFor(World world) {
@@ -76,6 +94,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
     }
 
     private void tickWorlds() {
+        serverTicks++;
         for (World world : Bukkit.getWorlds()) {
             String key = world.getUID().toString();
             if (worldsWithoutClock.contains(key)) {
@@ -84,6 +103,9 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
 
             WorldSettings settings = settingsFor(world);
             if (!settings.enabled()) {
+                restoreDaylightCycle(world);
+                timeRemainders.remove(key);
+                sleepReadySinceTicks.remove(key);
                 continue;
             }
 
@@ -92,22 +114,30 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
                     world.setGameRule(GameRule.DO_DAYLIGHT_CYCLE, false);
                 }
 
-                if (skipNightIfEnoughPlayersAreSleeping(world, key)) {
-                    continue;
-                }
-
                 long time = Math.floorMod(world.getTime(), FULL_DAY_TICKS);
                 boolean isDay = time < NIGHT_START;
                 double targetMinutes = isDay ? settings.dayMinutes() : settings.nightMinutes();
                 double span = isDay ? DAY_SPAN : NIGHT_SPAN;
                 double increment = span / (targetMinutes * 60.0 * SERVER_TICKS_PER_SECOND);
+                if (!isDay && enoughPlayersAreSleeping(world, key)) {
+                    increment *= SLEEP_NIGHT_SPEED_MULTIPLIER;
+                }
 
                 double totalIncrement = timeRemainders.getOrDefault(key, 0.0) + increment;
                 long wholeTicks = (long) Math.floor(totalIncrement);
                 timeRemainders.put(key, totalIncrement - wholeTicks);
 
                 if (wholeTicks > 0L) {
+                    long before = Math.floorMod(world.getTime(), FULL_DAY_TICKS);
                     world.setFullTime(world.getFullTime() + wholeTicks);
+                    long after = Math.floorMod(world.getTime(), FULL_DAY_TICKS);
+                    if (before >= NIGHT_START && after < NIGHT_START) {
+                        if (sleepReadySinceTicks.containsKey(key)) {
+                            finishSleepFastForward(world, key);
+                        } else {
+                            sleepReadySinceTicks.remove(key);
+                        }
+                    }
                 }
             } catch (IllegalArgumentException ex) {
                 worldsWithoutClock.add(key);
@@ -117,7 +147,17 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
         }
     }
 
-    private boolean skipNightIfEnoughPlayersAreSleeping(World world, String key) {
+    private void restoreDaylightCycle(World world) {
+        try {
+            if (Boolean.FALSE.equals(world.getGameRuleValue(GameRule.DO_DAYLIGHT_CYCLE))) {
+                world.setGameRule(GameRule.DO_DAYLIGHT_CYCLE, true);
+            }
+        } catch (IllegalArgumentException ignored) {
+            // Some worlds may not expose this gamerule.
+        }
+    }
+
+    private boolean enoughPlayersAreSleeping(World world, String key) {
         long time = Math.floorMod(world.getTime(), FULL_DAY_TICKS);
         if (time < NIGHT_START) {
             sleepReadySinceTicks.remove(key);
@@ -139,14 +179,15 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
             return false;
         }
 
-        long fullTime = world.getFullTime();
-        long readySince = sleepReadySinceTicks.computeIfAbsent(key, ignored -> fullTime);
-        if (fullTime - readySince < SLEEP_SKIP_DELAY_TICKS) {
+        long readySince = sleepReadySinceTicks.computeIfAbsent(key, ignored -> serverTicks);
+        if (serverTicks - readySince < SLEEP_SKIP_DELAY_TICKS) {
             return false;
         }
 
-        long currentTime = Math.floorMod(fullTime, FULL_DAY_TICKS);
-        world.setFullTime(fullTime - currentTime + FULL_DAY_TICKS + MORNING_TIME);
+        return true;
+    }
+
+    private void finishSleepFastForward(World world, String key) {
         world.setStorm(false);
         world.setThundering(false);
         timeRemainders.remove(key);
@@ -156,7 +197,6 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
                 player.wakeup(false);
             }
         }
-        return true;
     }
 
     private int requiredSleepingPercentage(World world) {
@@ -216,29 +256,36 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
 
         String path = "worlds." + world.getName() + ".";
         WorldSettings current = settingsFor(world);
-        getConfig().set(path + "enabled", current.enabled());
-        getConfig().set(path + "day-minutes", current.dayMinutes());
-        getConfig().set(path + "night-minutes", current.nightMinutes());
 
         String field = args[1].toLowerCase(Locale.ROOT);
         try {
             switch (field) {
                 case "day" -> {
+                    ensureWorldConfigScaffold(path, current);
                     double minutes = parseMinutes(args[2]);
                     getConfig().set(path + "day-minutes", minutes);
                     sender.sendMessage("§a[DayNightControl] §f" + world.getName() + "§a 낮 시간을 §f" + minutes + "분§a으로 설정했습니다.");
                 }
                 case "night" -> {
+                    ensureWorldConfigScaffold(path, current);
                     double minutes = parseMinutes(args[2]);
                     getConfig().set(path + "night-minutes", minutes);
                     sender.sendMessage("§a[DayNightControl] §f" + world.getName() + "§a 밤 시간을 §f" + minutes + "분§a으로 설정했습니다.");
                 }
                 case "enabled" -> {
-                    boolean enabled = Boolean.parseBoolean(args[2]);
+                    Boolean enabled = parseBooleanArg(args[2]);
+                    if (enabled == null) {
+                        sender.sendMessage("§cenabled 값은 true 또는 false만 사용할 수 있습니다.");
+                        return true;
+                    }
+                    ensureWorldConfigScaffold(path, current);
                     getConfig().set(path + "enabled", enabled);
                     sender.sendMessage("§a[DayNightControl] §f" + world.getName() + "§a 설정을 §f" + enabled + "§a로 바꿨습니다.");
                 }
-                default -> sender.sendMessage("§c항목은 day, night, enabled 중 하나여야 합니다.");
+                default -> {
+                    sender.sendMessage("§c항목은 day, night, enabled 중 하나여야 합니다.");
+                    return true;
+                }
             }
         } catch (IllegalArgumentException ex) {
             sender.sendMessage("§c" + ex.getMessage());
@@ -250,6 +297,12 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
         return true;
     }
 
+    private void ensureWorldConfigScaffold(String path, WorldSettings current) {
+        getConfig().set(path + "enabled", current.enabled());
+        getConfig().set(path + "day-minutes", current.dayMinutes());
+        getConfig().set(path + "night-minutes", current.nightMinutes());
+    }
+
     private double parseMinutes(String raw) {
         double minutes;
         try {
@@ -257,10 +310,16 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
         } catch (NumberFormatException ex) {
             throw new IllegalArgumentException("분 단위 숫자를 입력하세요. 예: 10, 20.5");
         }
-        if (minutes < 0.05 || minutes > 1440.0) {
+        if (!Double.isFinite(minutes) || minutes < 0.05 || minutes > 1440.0) {
             throw new IllegalArgumentException("시간은 0.05분 이상, 1440분 이하로 입력하세요.");
         }
         return minutes;
+    }
+
+    private Boolean parseBooleanArg(String raw) {
+        if (raw.equalsIgnoreCase("true")) return true;
+        if (raw.equalsIgnoreCase("false")) return false;
+        return null;
     }
 
     private World resolveWorld(CommandSender sender, String worldName) {
