@@ -3,6 +3,7 @@ package com.openclaw.daynightcontrol;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.GameRule;
+import org.bukkit.Statistic;
 import org.bukkit.World;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
@@ -216,6 +217,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
             return false;
         }
 
+        players.stream().filter(Player::isSleeping).forEach(this::resetPhantomTimer);
         sleepFastForwardWorlds.add(key);
         return true;
     }
@@ -242,8 +244,17 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
         sleepFastForwardWorlds.remove(key);
         for (Player player : world.getPlayers()) {
             if (player.isSleeping()) {
+                resetPhantomTimer(player);
                 player.wakeup(false);
             }
+        }
+    }
+
+    private void resetPhantomTimer(Player player) {
+        try {
+            player.setStatistic(Statistic.TIME_SINCE_REST, 0);
+        } catch (IllegalArgumentException ex) {
+            getLogger().warning("Failed to reset phantom timer for " + player.getName() + ": " + ex.getMessage());
         }
     }
 
