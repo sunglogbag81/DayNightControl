@@ -141,7 +141,12 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
                 double targetMinutes = isDay ? settings.dayMinutes() : settings.nightMinutes();
                 double span = isDay ? DAY_SPAN : NIGHT_SPAN;
                 double increment = span / (targetMinutes * 60.0 * SERVER_TICKS_PER_SECOND);
-                if (!isDay && (sleepFastForwardWorlds.contains(key) || enoughPlayersAreSleeping(world, key, settings))) {
+                boolean sleepFastForward = sleepFastForwardWorlds.contains(key) || enoughPlayersAreSleeping(world, key, settings);
+                if (isDay && sleepFastForward && world.isThundering()) {
+                    finishSleepFastForward(world, key);
+                    continue;
+                }
+                if (!isDay && sleepFastForward) {
                     increment *= settings.sleepFastForwardMultiplier();
                 }
 
@@ -182,7 +187,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
 
     private boolean enoughPlayersAreSleeping(World world, String key, WorldSettings settings) {
         long time = Math.floorMod(world.getTime(), FULL_DAY_TICKS);
-        if (time < NIGHT_START) {
+        if (time < NIGHT_START && !world.isThundering()) {
             sleepReadySinceTicks.remove(key);
             sleepFastForwardWorlds.remove(key);
             return false;
