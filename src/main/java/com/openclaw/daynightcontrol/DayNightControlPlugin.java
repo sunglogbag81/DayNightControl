@@ -56,7 +56,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
 
     private void loadSettings() {
         reloadConfig();
-        defaultSettings = readSettings(getConfig().getConfigurationSection("default"), new WorldSettings(true, 10.0, 10.0, 1.0, 600.0));
+        defaultSettings = readSettings(getConfig().getConfigurationSection("default"), new WorldSettings(true, 10.0, 10.0, 0.0, 5.0));
         worldSettings.clear();
 
         ConfigurationSection worlds = getConfig().getConfigurationSection("worlds");
@@ -76,7 +76,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
                 readMinutes(section, "day-minutes", fallback.dayMinutes()),
                 readMinutes(section, "night-minutes", fallback.nightMinutes()),
                 readSleepDelaySeconds(section, fallback.sleepDelaySeconds()),
-                readSleepFastForwardMultiplier(section, fallback.sleepFastForwardMultiplier())
+                readSleepFastForwardSeconds(section, fallback.sleepFastForwardSeconds())
         );
     }
 
@@ -100,11 +100,11 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
         return value;
     }
 
-    private double readSleepFastForwardMultiplier(ConfigurationSection section, double fallback) {
-        double value = section.getDouble("sleep-fast-forward-multiplier", fallback);
-        if (!Double.isFinite(value) || value < 1.0 || value > 10000.0) {
-            getLogger().warning(section.getCurrentPath() + ".sleep-fast-forward-multiplier has invalid value " + value
-                    + "; using " + fallback + " instead. Allowed range: 1..10000.");
+    private double readSleepFastForwardSeconds(ConfigurationSection section, double fallback) {
+        double value = section.getDouble("sleep-fast-forward-seconds", fallback);
+        if (!Double.isFinite(value) || value < 1.0 || value > 30.0) {
+            getLogger().warning(section.getCurrentPath() + ".sleep-fast-forward-seconds has invalid value " + value
+                    + "; using " + fallback + " instead. Allowed range: 1..30 seconds.");
             return fallback;
         }
         return value;
@@ -147,7 +147,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
                     continue;
                 }
                 if (!isDay && sleepFastForward) {
-                    increment *= settings.sleepFastForwardMultiplier();
+                    increment = sleepFastForwardIncrement(time, key, settings);
                 }
 
                 double totalIncrement = timeRemainders.getOrDefault(key, 0.0) + increment;
@@ -220,6 +220,20 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
         return true;
     }
 
+    private double sleepFastForwardIncrement(long currentTime, String key, WorldSettings settings) {
+        long remainingNightTicks = FULL_DAY_TICKS - currentTime;
+        Long readySince = sleepReadySinceTicks.get(key);
+        if (readySince == null) {
+            readySince = serverTicks;
+            sleepReadySinceTicks.put(key, readySince);
+        }
+        long delayTicks = Math.round(settings.sleepDelaySeconds() * SERVER_TICKS_PER_SECOND);
+        long durationTicks = Math.max(1L, Math.round(settings.sleepFastForwardSeconds() * SERVER_TICKS_PER_SECOND));
+        long elapsedFastForwardTicks = Math.max(0L, serverTicks - readySince - delayTicks);
+        long remainingServerTicks = Math.max(1L, durationTicks - elapsedFastForwardTicks);
+        return Math.max(1.0, remainingNightTicks / (double) remainingServerTicks);
+    }
+
     private void finishSleepFastForward(World world, String key) {
         world.setStorm(false);
         world.setThundering(false);
@@ -263,7 +277,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
                         + " §7day=§f" + settings.dayMinutes() + "분"
                         + " §7night=§f" + settings.nightMinutes() + "분"
                         + " §7sleep-delay=§f" + settings.sleepDelaySeconds() + "초"
-                        + " §7sleep-speed=§f" + settings.sleepFastForwardMultiplier() + "x");
+                        + " §7sleep-duration=§f" + settings.sleepFastForwardSeconds() + "초");
                 return true;
             }
             case "reload" -> {
@@ -283,7 +297,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
 
     private boolean handleSet(CommandSender sender, String[] args) {
         if (args.length < 3) {
-            sender.sendMessage("§c사용법: /dnc set <day|night|enabled|sleep-delay|sleep-speed> <값> [world]");
+            sender.sendMessage("§c사용법: /dnc set <day|night|enabled|sleep-delay|sleep-duration> <값> [world]");
             return true;
         }
 
@@ -324,14 +338,14 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
                     getConfig().set(path + "sleep-delay-seconds", seconds);
                     sender.sendMessage("§a[DayNightControl] §f" + world.getName() + "§a 수면 fast-forward 대기 시간을 §f" + seconds + "초§a로 설정했습니다.");
                 }
-                case "sleep-speed" -> {
+                case "sleep-duration" -> {
                     ensureWorldConfigScaffold(path, current);
-                    double multiplier = parseSleepFastForwardMultiplier(args[2]);
-                    getConfig().set(path + "sleep-fast-forward-multiplier", multiplier);
-                    sender.sendMessage("§a[DayNightControl] §f" + world.getName() + "§a 수면 fast-forward 속도를 §f" + multiplier + "x§a로 설정했습니다.");
+                    double seconds = parseSleepFastForwardSeconds(args[2]);
+                    getConfig().set(path + "sleep-fast-forward-seconds", seconds);
+                    sender.sendMessage("§a[DayNightControl] §f" + world.getName() + "§a 수면 fast-forward 시간을 §f" + seconds + "초§a로 설정했습니다.");
                 }
                 default -> {
-                    sender.sendMessage("§c항목은 day, night, enabled, sleep-delay, sleep-speed 중 하나여야 합니다.");
+                    sender.sendMessage("§c항목은 day, night, enabled, sleep-delay, sleep-duration 중 하나여야 합니다.");
                     return true;
                 }
             }
@@ -350,7 +364,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
         getConfig().set(path + "day-minutes", current.dayMinutes());
         getConfig().set(path + "night-minutes", current.nightMinutes());
         getConfig().set(path + "sleep-delay-seconds", current.sleepDelaySeconds());
-        getConfig().set(path + "sleep-fast-forward-multiplier", current.sleepFastForwardMultiplier());
+        getConfig().set(path + "sleep-fast-forward-seconds", current.sleepFastForwardSeconds());
     }
 
     private double parseMinutes(String raw) {
@@ -380,12 +394,12 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
         return seconds;
     }
 
-    private double parseSleepFastForwardMultiplier(String raw) {
-        double multiplier = parseDouble(raw, "배속 숫자를 입력하세요. 예: 100, 600");
-        if (multiplier < 1.0 || multiplier > 10000.0) {
-            throw new IllegalArgumentException("수면 fast-forward 속도는 1배 이상, 10000배 이하로 입력하세요.");
+    private double parseSleepFastForwardSeconds(String raw) {
+        double seconds = parseDouble(raw, "초 단위 숫자를 입력하세요. 예: 5, 7.5");
+        if (seconds < 1.0 || seconds > 30.0) {
+            throw new IllegalArgumentException("수면 fast-forward 시간은 1초 이상, 30초 이하로 입력하세요.");
         }
-        return multiplier;
+        return seconds;
     }
 
     private double parseDouble(String raw, String errorMessage) {
@@ -428,7 +442,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
         sender.sendMessage("§f/" + label + " set night <분> [world] §7- 밤 길이 설정");
         sender.sendMessage("§f/" + label + " set enabled <true|false> [world] §7- 켜기/끄기");
         sender.sendMessage("§f/" + label + " set sleep-delay <초> [world] §7- 잠 인원 충족 후 fast-forward 대기 시간");
-        sender.sendMessage("§f/" + label + " set sleep-speed <배속> [world] §7- 수면 중 밤 fast-forward 속도");
+        sender.sendMessage("§f/" + label + " set sleep-duration <초> [world] §7- 아침까지 밤을 넘길 시간");
         sender.sendMessage("§f/" + label + " reload §7- config.yml 다시 읽기");
     }
 
@@ -441,7 +455,7 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
             return filter(List.of("status", "set", "reload", "help"), args[0]);
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("set")) {
-            return filter(List.of("day", "night", "enabled", "sleep-delay", "sleep-speed"), args[1]);
+            return filter(List.of("day", "night", "enabled", "sleep-delay", "sleep-duration"), args[1]);
         }
         if (args.length == 3 && args[0].equalsIgnoreCase("set") && args[1].equalsIgnoreCase("enabled")) {
             return filter(List.of("true", "false"), args[2]);
@@ -464,6 +478,6 @@ public final class DayNightControlPlugin extends JavaPlugin implements TabExecut
     }
 
     private record WorldSettings(boolean enabled, double dayMinutes, double nightMinutes,
-                                 double sleepDelaySeconds, double sleepFastForwardMultiplier) {
+                                 double sleepDelaySeconds, double sleepFastForwardSeconds) {
     }
 }
